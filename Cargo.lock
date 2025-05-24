@@ -2295,6 +2295,10 @@ dependencies = [
 [[package]]
 name = "nahoy4"
 version = "0.1.0"
+dependencies = [
+ "alloy",
+ "tokio",
+]
 
 [[package]]
 name = "native-tls"

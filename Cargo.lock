@@ -2284,6 +2284,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nahoy3"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "futures-util",
+ "tokio",
+]
+
+[[package]]
 name = "native-tls"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"

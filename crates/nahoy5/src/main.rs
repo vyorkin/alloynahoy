@@ -1,11 +1,14 @@
 use std::error::Error;
 use std::ops::{Add, Div, Mul, Sub};
 
-use alloy::primitives::keccak256;
-use alloy::primitives::utils::format_units;
+use alloy::network::TransactionBuilder;
+use alloy::primitives::utils::{format_units, parse_units};
+use alloy::primitives::{B256, Bytes, keccak256};
+use alloy::providers::ProviderBuilder;
 use alloy::providers::{Provider, ext::AnvilApi};
-use alloy::sol;
-use alloy::sol_types::SolValue;
+use alloy::rpc::types::TransactionRequest;
+use alloy::sol_types::{SolCall, SolValue};
+use alloy::{hex, sol};
 use alloy::{
     primitives::{Address, U256, address},
     uint,
@@ -151,7 +154,7 @@ fn get_uniswappy_fee() -> U256 {
 }
 
 async fn set_hash_storage_slot<P: Provider>(
-    anvil_provider: &P,
+    anvil_provider: P,
     address: Address,
     hash_slot: U256,
     hash_key: Address,
@@ -171,7 +174,83 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let uniswap_pair = get_uniswap_pair();
     let sushi_pair = get_sushi_pair();
 
-    let amount_in = get_amount_in(
+    let wallet_address = address!("0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266");
+    let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
+        anvil.fork("https://reth-ethereum.ithaca.xyz/rpc")
+    })?;
+
+    let executor = FlashBotsMultiCall::deploy(provider.clone(), wallet_address).await?;
+    let iweth = IERC20::new(WETH_ADDR, provider.clone());
+
+    set_hash_storage_slot(
+        provider.clone(),
+        WETH_ADDR,
+        U256::from(3),
+        *executor.address(),
+        parse_units("5.0", "ether")?.into(),
+    )
+    .await?;
+
+    provider
+        .anvil_set_storage_at(
+            uniswap_pair.address,
+            U256::from(8), // getReserves slot
+            B256::from_slice(&hex!(
+                "665c6fcf00000000008ed55850d607f83a660000000526c08d812099d2577fbf"
+            )),
+        )
+        .await?;
+
+    set_hash_storage_slot(
+        &provider,
+        WETH_ADDR,
+        U256::from(3),
+        uniswap_pair.address,
+        uniswap_pair.reserve1,
+    )
+    .await?;
+
+    set_hash_storage_slot(
+        &provider,
+        DAI_ADDR,
+        U256::from(2),
+        uniswap_pair.address,
+        uniswap_pair.reserve0,
+    )
+    .await?;
+
+    provider
+        .anvil_set_storage_at(
+            sushi_pair.address,
+            U256::from(8), // getReserves slot
+            B256::from_slice(&hex!(
+                "665c6fcf00000000006407e2ec8d4f09436700000003919bf56d886af022979d"
+            )),
+        )
+        .await?;
+
+    set_hash_storage_slot(
+        &provider,
+        WETH_ADDR,
+        U256::from(3),
+        sushi_pair.address,
+        sushi_pair.reserve1,
+    )
+    .await?;
+
+    set_hash_storage_slot(
+        &provider,
+        DAI_ADDR,
+        U256::from(2),
+        sushi_pair.address,
+        sushi_pair.reserve0,
+    )
+    .await?;
+
+    let balance_of = iweth.balanceOf(*executor.address()).call().await?;
+    println!("Before - WETH balance of executor {:?}", balance_of);
+
+    let weth_amount_in = get_amount_in(
         uniswap_pair.reserve0,
         uniswap_pair.reserve1,
         false,
@@ -179,17 +258,44 @@ async fn main() -> Result<(), Box<dyn Error>> {
         sushi_pair.reserve1,
     );
 
-    let dai_amount_out = get_amount_out(uniswap_pair.reserve1, uniswap_pair.reserve0, amount_in);
+    let dai_amount_out =
+        get_amount_out(uniswap_pair.reserve1, uniswap_pair.reserve0, weth_amount_in);
+
     let weth_amount_out = get_amount_out(sushi_pair.reserve0, sushi_pair.reserve1, dai_amount_out);
 
-    if weth_amount_out < amount_in {
-        println!("no profit detected");
-        return Ok(());
+    let swap1 = swapCall {
+        amount0Out: dai_amount_out,
+        amount1Out: U256::ZERO,
+        to: sushi_pair.address,
+        data: Bytes::new(),
     }
+    .abi_encode();
 
-    let profit = weth_amount_out - amount_in;
-    println!("weth amount in: {}", format_units(amount_in, 18).unwrap());
-    println!("weth profit: {}", format_units(profit, 18).unwrap());
+    let swap2 = swapCall {
+        amount0Out: U256::ZERO,
+        amount1Out: weth_amount_out,
+        to: *executor.address(),
+        data: Bytes::new(),
+    }
+    .abi_encode();
+
+    let arb_calldata = FlashBotsMultiCall::uniswapWethCall {
+        _wethAmountToFirstMarket: weth_amount_in,
+        _ethAmountToCoinbase: U256::ZERO,
+        _targets: vec![uniswap_pair.address, sushi_pair.address],
+        _payloads: vec![Bytes::from(swap1), Bytes::from(swap2)],
+    }
+    .abi_encode();
+
+    let arb_tx = TransactionRequest::default()
+        .with_to(*executor.address())
+        .with_input(arb_calldata);
+
+    let pending = provider.send_transaction(arb_tx).await?;
+    pending.get_receipt().await?;
+
+    let balance_of = iweth.balanceOf(*executor.address()).call().await?;
+    println!("After - WETH balance of executor {:?}", balance_of);
 
     Ok(())
 }

@@ -1,3 +1,9 @@
 [workspace]
 resolver = "2"
-members = ["crates/nahoy1", "crates/nahoy2", "crates/nahoy3", "crates/nahoy4"]
+members = [
+  "crates/nahoy1",
+  "crates/nahoy2",
+  "crates/nahoy3",
+  "crates/nahoy4",
+  "crates/nahoy5",
+]

@@ -1,0 +1,13 @@
+[package]
+name = "nahoy5"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.0.7", features = [
+  "full",
+  "provider-anvil-node",
+  "provider-anvil-api",
+] }
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+eyre = "0.6"

@@ -1,16 +1,35 @@
 use std::error::Error;
 use std::ops::{Add, Div, Mul, Sub};
 
+use alloy::primitives::keccak256;
 use alloy::primitives::utils::format_units;
+use alloy::providers::{Provider, ext::AnvilApi};
+use alloy::sol;
+use alloy::sol_types::SolValue;
 use alloy::{
     primitives::{Address, U256, address},
     uint,
 };
 
-// uni v2 arb simulation
-
 pub static WETH_ADDR: Address = address!("C02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
 pub static DAI_ADDR: Address = address!("6B175474E89094C44Da98b954EedeAC495271d0F");
+
+sol! {
+    function swap(uint amount0Out, uint amount1Out, address to, bytes calldata data) external;
+}
+
+sol!(
+    #[sol(rpc)]
+    contract IERC20 {
+        function balanceOf(address target) returns (uint256);
+    }
+);
+
+sol!(
+    #[sol(rpc)]
+    FlashBotsMultiCall,
+    "../../sol/out/BundleExecutor.sol/FlashBotsMultiCall.json"
+);
 
 #[derive(Debug)]
 pub struct UniV2Pair {
@@ -129,6 +148,22 @@ fn get_denominator(
 
 fn get_uniswappy_fee() -> U256 {
     U256::from(997)
+}
+
+async fn set_hash_storage_slot<P: Provider>(
+    anvil_provider: &P,
+    address: Address,
+    hash_slot: U256,
+    hash_key: Address,
+    value: U256,
+) -> eyre::Result<()> {
+    let hashed_slot = keccak256((hash_key, hash_slot).abi_encode());
+
+    anvil_provider
+        .anvil_set_storage_at(address, hashed_slot.into(), value.into())
+        .await?;
+
+    Ok(())
 }
 
 #[tokio::main]
